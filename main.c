@@ -11,7 +11,7 @@ TODO :
 
 BOOL SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege);
 BOOL ListProcessThreads( DWORD dwOwnerPID, INT searched_process_pid);
-BOOL GeneralProcessInfos(char* searched_exec);
+BOOL GeneralProcessInfos(char* searched_exec, BOOL only_process_name, int process_id, char* returned_exec);
 
 int main(int argc, char *argv[])
 {
@@ -20,13 +20,12 @@ int main(int argc, char *argv[])
 
     if (OpenProcessToken(hProcess, TOKEN_ADJUST_PRIVILEGES, &hToken))
     {
-        //if(!SetPrivilege(hToken, SE_SECURITY_NAME, TRUE))
         if(!SetPrivilege(hToken, SE_DEBUG_NAME, TRUE))
         {
             printf("Error setting privileges");
         }
-        else
-            printf("New privileges activated\n");
+        //else
+        //    printf("New privileges activated\n");
         
         CloseHandle(hToken);
     }
@@ -38,11 +37,12 @@ int main(int argc, char *argv[])
     BOOL thread_search = FALSE;
     int searched_thread_id;
     
-    for(int i=1; i< argc; i++) // Evite le nom de fichier en entree
+    for(int i=1; i< argc; i++) // i=1 Evite le nom de fichier en entree
     {
-        if(argv[i] == "-h")
+        if(!strcmp(argv[i], "-h"))
         {
-            printf("Help page : ");
+            printf("Help page : \n   <process_exec> : Filter on process name\n   -d <PID> : Infos on a thread");
+            return 0;
         }
         else if(!strcmp(argv[i], "-d"))
         {
@@ -51,7 +51,7 @@ int main(int argc, char *argv[])
                 searched_thread_id = atoi(argv[i+1]);
             else
                 searched_thread_id = -1;
-            printf("Searched thread id : %d\n", searched_thread_id);
+            //printf("Searched thread id : %d\n", searched_thread_id);
         }
         else
         {
@@ -64,6 +64,11 @@ int main(int argc, char *argv[])
 
     if(thread_search)   // Launch different functions
     {
+        char* returned_exec = malloc(sizeof(char));
+        //int int_searched_id = 0;
+        //sprintf(searched_thread_id, "%d", int_searched_id);
+        GeneralProcessInfos(NULL, TRUE, searched_thread_id, returned_exec);
+        printf("%s %d: \n", returned_exec, searched_thread_id);
         ListProcessThreads(searched_thread_id, searched_thread_id);
         //if(ShowThreadInfos(searched_thread_id))
         //    printf("Error : %d\n", GetLastError());
@@ -72,7 +77,8 @@ int main(int argc, char *argv[])
     }
     else
     {
-        if(GeneralProcessInfos(searched_exec))
+        void* null_ = NULL;
+        if(GeneralProcessInfos(searched_exec, FALSE, 0, null_))
             printf("Error\n");
         return 0;
     }
@@ -80,7 +86,7 @@ int main(int argc, char *argv[])
     return 0;
 }
 
-BOOL GeneralProcessInfos(char* searched_exec)
+BOOL GeneralProcessInfos(char* searched_exec, BOOL silent, int searched_id, char* returned_exec)
 {
     /////////////////////Create snapshot
     
@@ -115,23 +121,30 @@ BOOL GeneralProcessInfos(char* searched_exec)
             max_len = strlen(process.szExeFile);
     }while(Process32Next(hsnapshot, &process));
 
-    printf("<Exe>");
-    for(int i=0; i<max_len/5; i++)
-        printf("\t");
-    printf("<Pid>\t<Pri>\t<Thrds>\t<Hnd>\t<Priv>\t\t\t\t<CPU Time>\t\t<Elapsed Time>\n");    // Top of the returned tab
+    if(!silent)
+    {
+        printf("<Exe>");
+        for(int i=0; i<max_len/5; i++)
+            printf("\t");
+        printf("<Pid>\t<Pri>\t<Thrds>\t<Hnd>\t<Priv>\t\t\t\t<CPU Time>\t\t<Elapsed Time>\n");    // Top of the returned tab
+    }
     /////////////////////
 
     Process32First(hsnapshot, &process);
-    HANDLE memory_handle;
-    LPFILETIME start_time = malloc(sizeof(LPFILETIME));
+    /*LPFILETIME start_time = malloc(sizeof(LPFILETIME));
     LPFILETIME end_time = malloc(sizeof(LPFILETIME));
-    LPFILETIME kernel_time;
-    LPFILETIME user_time;
+    LPFILETIME kernel_time  = malloc(sizeof(LPFILETIME));
+    LPFILETIME user_time  = malloc(sizeof(LPFILETIME));*/
+    FILETIME start_time;
+    FILETIME end_time;
+    FILETIME kernel_time;
+    FILETIME user_time;
     FILETIME raw_time_to_print;
+    SYSTEMTIME time_to_print_start;
+    SYSTEMTIME time_to_print_end;
     SYSTEMTIME time_to_print;
     HANDLE process_handle;
-    BOOL valid;
-    PDWORD hndCount;
+    PDWORD hndCount = malloc(sizeof(PDWORD));
     PROCESS_MEMORY_COUNTERS memCount;
     int rep;
     int j;
@@ -140,7 +153,18 @@ BOOL GeneralProcessInfos(char* searched_exec)
     do                      /// On parcourt les process
     {
         process_name = process.szExeFile;
-        if(searched_exec != NULL && strcmp(searched_exec, process_name) || process.th32ProcessID == 0)
+        if(silent) // We only want to get the name in this case
+        {
+            if(searched_id == process.th32ProcessID)
+            {
+                returned_exec = process_name;
+                printf("%s", process_name);
+                return FALSE;
+            }
+            else
+                continue;
+        }
+        if((searched_exec != NULL && strcmp(searched_exec, process_name)) || process.th32ProcessID == 0)
             continue;
         
         printf(process.szExeFile); // Exe
@@ -165,15 +189,15 @@ BOOL GeneralProcessInfos(char* searched_exec)
         else
         {
         //////////////////////////// Hnd   
-            if(GetProcessHandleCount(process_handle,&hndCount))
-                printf("\t%d", hndCount);
+            if(GetProcessHandleCount(process_handle,hndCount))
+                printf("\t%n", hndCount);
             else
                 printf("\t0");  // Au cas ou on set a zero
         ///////////////////////// Priv
             memCount.cb = sizeof(PROCESS_MEMORY_COUNTERS);
             if(GetProcessMemoryInfo(process_handle, &memCount, sizeof(PROCESS_MEMORY_COUNTERS)))
             {
-                printf("\t%d",memCount.PagefileUsage);
+                printf("\t%lld",memCount.PagefileUsage);
                 rep = 1;
                 j = 0;
                 while(rep < memCount.PagefileUsage)
@@ -193,13 +217,31 @@ BOOL GeneralProcessInfos(char* searched_exec)
             if(!GetProcessTimes(process_handle, &start_time, &end_time, &kernel_time, &user_time) == 0) // if no error
             {
                 if(LocalFileTimeToFileTime(&raw_time_to_print, &kernel_time))
+                {
                     if(FileTimeToSystemTime(&raw_time_to_print, &time_to_print))
                         printf("\t\t%d:%d:%d.%d", time_to_print.wHour, time_to_print.wMinute, time_to_print.wSecond, time_to_print.wMilliseconds);    // CPU Time
+                }
 
-                end_time = end_time-start_time;
-                if(LocalFileTimeToFileTime(&raw_time_to_print, &end_time))
-                    if(FileTimeToSystemTime(&raw_time_to_print, &time_to_print))
-                        printf("\t\t%d:%d:%d.%d", time_to_print.wHour, time_to_print.wMinute, time_to_print.wSecond, time_to_print.wMilliseconds);  // Elapsed Time
+                if(FileTimeToSystemTime(&start_time, &time_to_print_start) && FileTimeToSystemTime(&end_time, &time_to_print_end))
+                {
+                    if(time_to_print_end.wHour != 0 && time_to_print_end.wMinute != 0 && time_to_print_end.wSecond != 0)
+                    {
+                        printf("\t\t%d:%d:%d.%d", 
+                        time_to_print_end.wHour-time_to_print_start.wHour,
+                        time_to_print_end.wMinute-time_to_print_start.wMinute,
+                        time_to_print_end.wSecond-time_to_print_start.wSecond,
+                        time_to_print_end.wMilliseconds-time_to_print_start.wMilliseconds);    // elapsed Time
+                    
+                    }
+                    else
+                    {
+                        printf("\t\t%d:%d:%d.%d", 
+                        time_to_print_start.wHour,
+                        time_to_print_start.wMinute,
+                        time_to_print_start.wSecond,
+                        time_to_print_start.wMilliseconds);    // elapsed Time
+                    }
+                }
             }
             CloseHandle(process_handle);
             //////////////////
@@ -207,6 +249,7 @@ BOOL GeneralProcessInfos(char* searched_exec)
         printf("\n");
         // Get thread id
     }while(Process32Next(hsnapshot, &process));
+    return FALSE;
 }
 
 BOOL ListProcessThreads( DWORD dwOwnerPID, INT searched_process_pid) // When option -d is present
@@ -233,28 +276,31 @@ BOOL ListProcessThreads( DWORD dwOwnerPID, INT searched_process_pid) // When opt
   BOOL tab_inited = FALSE;
   HANDLE hThread;
   CONTEXT threadContext;
-  LPFILETIME start_time;
-  LPFILETIME end_time;
-  LPFILETIME kernel_time;
-  LPFILETIME user_time;
-  FILETIME raw_time_to_print;
+  FILETIME start_time;
+  FILETIME end_time;
+  FILETIME kernel_time;
+  FILETIME user_time;
   SYSTEMTIME time_to_print;
+  SYSTEMTIME time_to_print_start;
+  SYSTEMTIME time_to_print_end;
   do 
   { 
     if( te32.th32OwnerProcessID == dwOwnerPID )
     {
         if(searched_process_pid == te32.th32OwnerProcessID)
         {
+            
             if(!tab_inited)
             {
                 printf("<Tid>\t<Pri>\t\t<Cswtch>\t<State>\t\t<User Time>\t\t<Kernel Time>\t\t<Elapsed Time>\n");
                 tab_inited = TRUE;
             }
+            
             // infos dans te32
             printf("%d\t", te32.th32ThreadID);
             printf("%d\t", te32.tpBasePri);
             //printf("%d\t", te32.cntUsage);
-            hThread = OpenThread(THREAD_QUERY_INFORMATION | THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_DIRECT_IMPERSONATION, FALSE, te32.th32ThreadID);
+            hThread = OpenThread(THREAD_QUERY_INFORMATION | THREAD_GET_CONTEXT | THREAD_SUSPEND_RESUME | THREAD_DIRECT_IMPERSONATION | SYNCHRONIZE, FALSE, te32.th32ThreadID);
             // Le thread doit nous appartenir (d'ou l'impersonate) et etre suspend pour get le context
             if(hThread == NULL)
             {
@@ -271,26 +317,62 @@ BOOL ListProcessThreads( DWORD dwOwnerPID, INT searched_process_pid) // When opt
                     printf("Error: %d\n", GetLastError());
                     printf("Pas de thread context");
                 }
-                ResumeThread(hThread);
+            
                 /////////////
                 ///// State
-                printf("\t\tMISS");
+                //printf("\t\tMISSING");
+                DWORD res = WaitForSingleObject(hThread, 0);
+                ResumeThread(hThread);
+                if(res == WAIT_OBJECT_0)
+                {
+                    printf("\t\tFINISHED");
+                }
+                else if(res == WAIT_TIMEOUT)
+                {
+                    printf("\t\tSTILL RUNNING");
+                }
+                else
+                {
+                    printf("\t\tERROR SINGLE OBJECT %d", res);
+                }
+                
+
+                //printf("État du thread : %b\t", threadContext.EFlags);
                 //////A remplir
                 /////////////
                 ///// Times
                 if(GetThreadTimes(hThread, &start_time, &end_time, &kernel_time, &user_time)) // if no error
                 {
-                    if(LocalFileTimeToFileTime(&raw_time_to_print, &user_time))
-                        if(FileTimeToSystemTime(&raw_time_to_print, &time_to_print))
+                        if(FileTimeToSystemTime(&user_time, &time_to_print))
+                        {
                             printf("\t\t%d:%d:%d.%d", time_to_print.wHour, time_to_print.wMinute, time_to_print.wSecond, time_to_print.wMilliseconds);    // user Time
-                    if(LocalFileTimeToFileTime(&raw_time_to_print, &kernel_time))
-                        if(FileTimeToSystemTime(&raw_time_to_print, &time_to_print))
+                        }
+                            
+                        if(FileTimeToSystemTime(&kernel_time, &time_to_print))
                             printf("\t\t%d:%d:%d.%d", time_to_print.wHour, time_to_print.wMinute, time_to_print.wSecond, time_to_print.wMilliseconds);    // kernel Time
                     
-                    end_time = end_time-start_time; // elapsed here
-                    if(LocalFileTimeToFileTime(&raw_time_to_print, &user_time))
-                        if(FileTimeToSystemTime(&raw_time_to_print, &time_to_print))
-                            printf("\t\t\t%d:%d:%d.%d", time_to_print.wHour, time_to_print.wMinute, time_to_print.wSecond, time_to_print.wMilliseconds);    // elapsed Time
+                        //end_time = end_time-start_time; // elapsed here
+                        if(FileTimeToSystemTime(&start_time, &time_to_print_start) && FileTimeToSystemTime(&end_time, &time_to_print_end))
+                        {
+                            if(time_to_print_end.wHour != 0 && time_to_print_end.wMinute != 0 && time_to_print_end.wSecond != 0)
+                            {
+                                printf("\t\t\t%d:%d:%d.%d", 
+                                time_to_print_end.wHour-time_to_print_start.wHour,
+                                time_to_print_end.wMinute-time_to_print_start.wMinute,
+                                time_to_print_end.wSecond-time_to_print_start.wSecond,
+                                time_to_print_end.wMilliseconds-time_to_print_start.wMilliseconds);    // elapsed Time
+                            
+                            }
+                            else
+                            {
+                                printf("\t\t\t%d:%d:%d.%d", 
+                                time_to_print_start.wHour,
+                                time_to_print_start.wMinute,
+                                time_to_print_start.wSecond,
+                                time_to_print_start.wMilliseconds);    // elapsed Time
+                            }
+                        }
+                                
                     //////////////
                     CloseHandle(hThread);
                 }
@@ -320,8 +402,8 @@ BOOL SetPrivilege(HANDLE hToken, LPCTSTR lpszPrivilege, BOOL bEnablePrivilege)
         //
         //  Enable the privilege or disable all privileges.
         //
-        DWORD temp_;
-        if (AdjustTokenPrivileges(hToken, FALSE, &tp, NULL, (PTOKEN_PRIVILEGES)NULL, (PDWORD)NULL))
+        int null_ = 0;
+        if (AdjustTokenPrivileges(hToken, FALSE, &tp, null_, (PTOKEN_PRIVILEGES)NULL, (PDWORD)NULL))
         {
             //
             //  Check to see if you have proper access.
